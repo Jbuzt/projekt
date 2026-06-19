@@ -313,17 +313,6 @@ async def fetch_buff_listings(session: httpx.AsyncClient, goods_id: int, min_pai
 
 def parse_buff_listings(raw_listings: List[Dict], goods_id: int, currency_rate: Optional[float]) -> List[Dict]:
     """
-    Parses raw Buff163 listing data into the format suitable for database insertion/update.
-    Converts CNY prices to USD using the provided currency rate.
-    Args:
-        raw_listings (List[Dict]): Raw data from Buff163 API.
-        goods_id (int): The goods_id these listings belong to.
-        currency_rate (Optional[float]): The CNY to USD conversion rate.
-    Returns:
-        List[Dict]: A list of parsed listing dictionaries.
-    """
-def parse_buff_listings(raw_listings: List[Dict], goods_id: int, currency_rate: Optional[float]) -> List[Dict]:
-    """
     Parses raw Buff163 sell_order listing data into the format suitable for database insertion.
     Extracts: skin_name, asset_id (Steam assetid), float_val (paintwear),
     pattern_id (paintseed), price (CNY -> USD).
@@ -425,6 +414,7 @@ async def scrape_item(db_manager: database.DatabaseManager, paint_index: int, mi
                     timestamp_str=listing_info["timestamp_str"],
                     float_val=listing_info["float_val"],
                     pattern_id=listing_info["pattern_id"],
+                    skin_id=paint_index,
                 )
                 saved += 1
                 seen_base_names.add(_base_skin_name(listing_info["skin_name"]))
@@ -638,6 +628,7 @@ async def scrape_buff_sell_orders_for_monitored(db_manager: database.DatabaseMan
                     timestamp_str=listing_info["timestamp_str"],
                     float_val=listing_info["float_val"],
                     pattern_id=listing_info["pattern_id"],
+                    skin_id=goods_id,
                 )
                 saved += 1
 
