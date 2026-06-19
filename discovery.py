@@ -253,66 +253,85 @@ async def run_buff_mapping_discovery(db_manager: database.DatabaseManager):
     """
     Main function to run the Buff163 item mapping discovery process.
     Iterates through pages, extracts mappings, and stores them in the database.
+    
+    NOTE: This is a HEAVY operation that scrapes ALL items on Buff163.
+    It should only be run occasionally (e.g., once per week) due to:
+    - Rate limiting risks (Buff163 may block aggressive scraping)
+    - Time consumption (1700+ pages × 10-30s delay = 5-14 hours)
+    - API stability (undocumented endpoints may change)
+    
+    Consider running this manually or with extended intervals instead of automated scheduling.
     Args:
         db_manager (database.DatabaseManager): Instance of the database manager.
     """
-    logger.info("Starting Buff163 item mapping discovery...")
+    logger.warning("Starting Buff163 item mapping discovery... THIS MAY TAKE SEVERAL HOURS.")
+    logger.warning("Consider running this manually instead of automated scheduling.")
 
-    # Estimate total pages or find a way to determine the upper limit.
-    # For now, let's assume a maximum number based on your estimate (~1705).
-    # A better approach is to fetch the first page and get 'total_page' from the response data.
-    # We'll implement that.
-    max_pages_to_check = 10000 # Set a high upper limit as a safety net, but rely on API response for actual end
+    # Fetch first page to determine total pages, then iterate
+    max_pages_to_check = 10000  # Safety upper limit
     current_page = 1
     items_discovered = 0
+    consecutive_empty_pages = 0
+    MAX_CONSECUTIVE_EMPTY = 3  # Stop after 3 consecutive empty pages
 
-    # Use httpx.AsyncClient for efficient async requests
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-        while current_page <= max_pages_to_check:
-            logger.info(f"Discovering items on page {current_page}...")
+        # First, fetch page 1 to get total_page count
+        logger.info("Fetching page 1 to determine total pages...")
+        response_json = await fetch_discovery_page(client, current_page)
+        
+        if not response_json:
+            logger.error("Failed to get page 1. Stopping discovery.")
+            return
+        
+        # Get total pages from first response
+        data_block = response_json.get("data", {})
+        total_pages_api = data_block.get("total_page", 0)
+        
+        if total_pages_api == 0:
+            logger.error("Could not determine total pages from API response. Stopping.")
+            return
+        
+        logger.info(f"Total pages to scrape: {total_pages_api}. This will take approximately {total_pages_api * 20 / 3600:.1f} hours.")
+        
+        # Process page 1
+        discovered_items = parse_discovery_response(response_json)
+        for goods_id, buff_name in discovered_items:
+            db_manager.insert_buff_mapping(goods_id, buff_name)
+            items_discovered += 1
+        
+        current_page = 2  # Start from page 2
+        
+        # Now iterate through remaining pages
+        while current_page <= min(total_pages_api, max_pages_to_check):
+            logger.info(f"Discovering items on page {current_page}/{total_pages_api}...")
 
             response_json = await fetch_discovery_page(client, current_page)
             if not response_json:
                 logger.error(f"Failed to get data for page {current_page}. Stopping discovery.")
-                break # Stop if a page fails significantly
+                break
 
             discovered_items = parse_discovery_response(response_json)
 
             if not discovered_items:
-                # Check if the API indicated no more items (e.g., empty items list on a page that should have items)
-                # If items list is empty, it might mean we've reached the end.
-                data_block = response_json.get("data", {})
-                items_list = data_block.get("items", [])
-                if len(items_list) == 0:
-                     logger.info(f"Page {current_page} returned no items. Assuming end of list reached.")
-                     break
-                else:
-                     # Items list was empty but API didn't clearly indicate end. Log and continue or break based on tolerance.
-                     logger.warning(f"Page {current_page} returned no *parsed* items, but API responded OK. Continuing...")
-                     # Maybe increment a counter and break if several consecutive empty parses occur.
-                     current_page += 1
-                     continue
+                consecutive_empty_pages += 1
+                logger.warning(f"Page {current_page} returned no parsed items (consecutive: {consecutive_empty_pages}).")
+                
+                if consecutive_empty_pages >= MAX_CONSECUTIVE_EMPTY:
+                    logger.info(f"{MAX_CONSECUTIVE_EMPTY} consecutive empty pages reached. Assuming end of list.")
+                    break
+                    
+                current_page += 1
+                continue
+            
+            consecutive_empty_pages = 0  # Reset counter on successful parse
 
-
-            # Store discovered items in the database
             for goods_id, buff_name in discovered_items:
-                # Check if mapping already exists to avoid unnecessary upserts?
-                # Optional optimization: db_manager.get_buff_mapping_by_goods_id(goods_id)
-                # If not found, then insert/update.
-                # For now, just upsert, DB will handle duplicates efficiently.
                 db_manager.insert_buff_mapping(goods_id, buff_name)
                 items_discovered += 1
 
-            # Check if the API response indicates the last page
-            data_block = response_json.get("data", {})
-            total_pages_api = data_block.get("total_page", 0)
-            if total_pages_api and current_page >= total_pages_api:
-                 logger.info(f"Reached the reported total pages ({total_pages_api}). Discovery complete.")
-                 break
-
             current_page += 1
 
-    logger.info(f"Buff163 item mapping discovery finished. Discovered {items_discovered} items.")
+    logger.info(f"Buff163 item mapping discovery finished. Discovered {items_discovered} items total.")
 
 
 # Example usage (when this file is run directly):

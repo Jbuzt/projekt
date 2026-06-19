@@ -25,20 +25,21 @@ class DatabaseManager:
             logger.critical(f"Failed to connect to Supabase: {e}")
             raise # Re-raise the exception to halt execution if connection fails
 
-    def insert_or_update_listing(self, skin_name: str, asset_id: str, source: str, original_price_usd: float, current_price_usd: float, timestamp_str: str, float_val: Optional[float] = None, pattern_id: Optional[int] = None):
+    def insert_or_update_listing(self, skin_name: str, asset_id: str, source: str, original_price_usd: float, current_price_usd: float, timestamp_str: str, float_val: Optional[float] = None, pattern_id: Optional[int] = None, skin_id: Optional[int] = None):
         """
         Inserts or updates a listing in the 'listings' table.
         Upserts on (asset_id, src) — asset_id is the Steam asset ID for CSFloat
-        or 'BUFF-{goods_id}' for Buff163 aggregate entries.
+        or the Buff163 asset ID for Buff163 individual listings.
         Args:
             skin_name (str): The market hash name, e.g. 'AK-47 | Bloodsport (Field-Tested)'.
-            asset_id (str): Unique item identifier (Steam asset ID or 'BUFF-{goods_id}').
+            asset_id (str): Unique item identifier (Steam asset ID or Buff163 asset ID).
             source (str): 'CSFL' or 'BUFF'.
             original_price_usd (float): Original listed price in USD.
             current_price_usd (float): Most recent price in USD.
             timestamp_str (str): Timestamp string in 'DD/MM/YYYY HH:MM AM/PM' format.
             float_val (Optional[float]): Item float value.
             pattern_id (Optional[int]): Paint seed / pattern ID.
+            skin_id (Optional[int]): Platform-specific skin identifier (paint_index for CSFloat, goods_id for BUFF).
         """
         from utils import parse_timestamp_string
         timestamp_dt = parse_timestamp_string(timestamp_str)
@@ -53,6 +54,7 @@ class DatabaseManager:
             "up_at":      timestamp_dt.isoformat(),
             "float_value": float_val,
             "pattern_id": pattern_id,
+            "skin_id":    skin_id,
         }
 
         try:
@@ -316,6 +318,92 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to link buff_mapping for '{base_name}' → paint_index {paint_index}: {e}")
             return 0
+
+    def upsert_buff_discovery(
+        self,
+        goods_id: int,
+        item_name: str,
+        wear_category: str,
+        min_price: float,
+        max_price: float,
+        avg_price: float,
+        sample_count: int,
+        min_float: Optional[float] = None,
+        max_float: Optional[float] = None,
+    ):
+        """
+        Upsert aggregated discovery data into buff_discovery_cache table.
+        Updates existing records with new price/float statistics.
+        """
+        try:
+            # Check if record exists
+            existing = (
+                self.client.table('buff_discovery_cache')
+                .select('goods_id')
+                .eq('goods_id', goods_id)
+                .execute()
+            )
+            
+            record = {
+                'goods_id': goods_id,
+                'item_name': item_name,
+                'wear_category': wear_category,
+                'min_price': round(min_price, 2),
+                'max_price': round(max_price, 2),
+                'avg_price': round(avg_price, 2),
+                'sample_count': sample_count,
+                'min_float': round(min_float, 6) if min_float is not None else None,
+                'max_float': round(max_float, 6) if max_float is not None else None,
+                'last_seen_at': datetime.now().isoformat(),
+            }
+            
+            if existing.data and len(existing.data) > 0:
+                # Update existing record - merge statistics
+                current = existing.data[0]
+                new_sample_count = current.get('sample_count', 0) + sample_count
+                
+                # Recalculate averages weighted by sample count
+                old_avg = current.get('avg_price', 0)
+                old_count = current.get('sample_count', 0)
+                new_avg = ((old_avg * old_count) + (avg_price * sample_count)) / new_sample_count
+                
+                update_data = {
+                    'min_price': min(current.get('min_price', min_price), min_price),
+                    'max_price': max(current.get('max_price', max_price), max_price),
+                    'avg_price': round(new_avg, 2),
+                    'sample_count': new_sample_count,
+                    'last_seen_at': datetime.now().isoformat(),
+                }
+                
+                # Update float ranges if we have new data
+                if min_float is not None:
+                    old_min_float = current.get('min_float')
+                    if old_min_float is None or min_float < old_min_float:
+                        update_data['min_float'] = round(min_float, 6)
+                        
+                if max_float is not None:
+                    old_max_float = current.get('max_float')
+                    if old_max_float is None or max_float > old_max_float:
+                        update_data['max_float'] = round(max_float, 6)
+                
+                result = (
+                    self.client.table('buff_discovery_cache')
+                    .update(update_data)
+                    .eq('goods_id', goods_id)
+                    .execute()
+                )
+                logger.debug(f"[BuffDiscovery] Updated goods_id {goods_id} ({item_name})")
+            else:
+                # Insert new record
+                result = (
+                    self.client.table('buff_discovery_cache')
+                    .insert([record])
+                    .execute()
+                )
+                logger.debug(f"[BuffDiscovery] Inserted goods_id {goods_id} ({item_name})")
+                
+        except Exception as e:
+            logger.error(f"Failed to upsert buff_discovery for goods_id {goods_id}: {e}")
 
 # Example usage (when this file is run directly):
 # if __name__ == "__main__":

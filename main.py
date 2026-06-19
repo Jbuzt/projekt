@@ -125,9 +125,18 @@ async def main():
         (639, 0.15, 0.25),   # AK-47 | Bloodsport — Field-Tested range
     ]
 
-    # Kick off an immediate Buff163 global scrape on startup
+    # Kick off immediate Buff163 scrapes on startup
     logger.info("[Buff163] Scheduling immediate global scrape on startup...")
     asyncio.ensure_future(scraper.scrape_buff_global(db_manager))
+    
+    # Also run individual sell_order scrape immediately (needs linked mappings from global scrape)
+    # Give global scrape a moment to populate buff_mapping first
+    async def run_buff_sell_orders_after_delay():
+        await asyncio.sleep(30)  # Wait for global scrape to learn some mappings
+        await scraper.scrape_buff_sell_orders_for_monitored(db_manager)
+    
+    logger.info("[Buff163] Scheduling immediate sell_order scrape (30s delay)...")
+    asyncio.ensure_future(run_buff_sell_orders_after_delay())
 
     logger.info(f"Monitoring {len(ITEMS_TO_MONITOR)} item configuration(s). Scrape interval: {config.SCRAPE_INTERVAL_SECONDS}s.")
     logger.info("Entering main scraping loop...")
