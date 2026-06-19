@@ -18,7 +18,7 @@ from collections import defaultdict
 import json
 
 # Import from existing modules
-from config import BUFF163_API_KEY, SUPABASE_URL, SUPABASE_KEY
+from config import SUPABASE_URL, SUPABASE_KEY
 from database import Database
 
 # Buff163 category IDs (you may need to expand this list)
