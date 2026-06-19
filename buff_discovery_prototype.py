@@ -19,7 +19,10 @@ import json
 
 # Import from existing modules
 from config import SUPABASE_URL, SUPABASE_KEY
-from database import Database
+from supabase import create_client, Client
+
+# Initialize Supabase client
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Buff163 category IDs (you may need to expand this list)
 # Common categories: 5=Knives, 20=Rifles, 21=Pistols, 22=SMGs, 23=Shotguns, 
@@ -35,7 +38,6 @@ TARGET_SKIN_NAMES = [
 
 class BuffDiscoveryBot:
     def __init__(self):
-        self.db = Database()
         self.session: Optional[aiohttp.ClientSession] = None
         self.stats = {
             'total_pages_checked': 0,
@@ -52,8 +54,6 @@ class BuffDiscoveryBot:
             'Accept': 'application/json',
             'X-Requested-With': 'XMLHttpRequest',
         }
-        if BUFF163_API_KEY:
-            headers['Authorization'] = f'Bearer {BUFF163_API_KEY}'
             
         self.session = aiohttp.ClientSession(headers=headers)
         
@@ -144,25 +144,31 @@ class BuffDiscoveryBot:
             if float_val is not None:
                 agg['floats'].append(float_val)
                 
-        # Store aggregated data in database
-        for goods_id, data in aggregated.items():
-            if not data['prices']:
-                continue
+            # Store aggregated data in database
+            for goods_id, data in aggregated.items():
+                if not data['prices']:
+                    continue
+                    
+                prices = data['prices']
+                floats = data['floats']
                 
-            prices = data['prices']
-            floats = data['floats']
-            
-            await self.db.upsert_buff_discovery(
-                goods_id=goods_id,
-                item_name=data['item_name'],
-                wear_category=data['wear_category'],
-                min_price=min(prices),
-                max_price=max(prices),
-                avg_price=sum(prices) / len(prices),
-                sample_count=len(prices),
-                min_float=min(floats) if floats else None,
-                max_float=max(floats) if floats else None,
-            )
+                try:
+                    # Direct Supabase upsert
+                    supabase.table('buff_discovery_cache').upsert({
+                        'goods_id': goods_id,
+                        'item_name': data['item_name'],
+                        'wear_category': data['wear_category'],
+                        'min_price': min(prices),
+                        'max_price': max(prices),
+                        'avg_price': sum(prices) / len(prices),
+                        'sample_count': len(prices),
+                        'min_float': min(floats) if floats else None,
+                        'max_float': max(floats) if floats else None,
+                        'updated_at': datetime.now().isoformat(),
+                    }, on_conflict='goods_id').execute()
+                    print(f"  ✓ Stored goods_id {goods_id} ({data['item_name']})")
+                except Exception as e:
+                    print(f"  ✗ Failed to store goods_id {goods_id}: {e}")
             
             self.stats['total_items_found'] += len(prices)
             
